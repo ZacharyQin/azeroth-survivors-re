@@ -130,12 +130,22 @@ jobs:
             codesign -dv "$MACOS/warcraft-survivors"
           fi
 
-          rm -rf target
-          hdiutil create \
-            -volname "Azeroth Survivors" \
-            -srcfolder "$STAGE" \
-            -ov -format UDZO \
-            "AzerothSurvivors-macos-arm64.dmg"
+          du -sh "$MACOS/warcraft-survivors" "$STAGE"
+          rm -rf target "${HOME}/.cargo/registry" "${HOME}/.cargo/git"
+          df -h /
+          KB="$(du -sk "$STAGE" | awk '{print $1}')"
+          SIZE_MB="$(( KB / 1024 * 2 + 512 ))"
+          echo "stage_kb=$KB image_mb=$SIZE_MB"
+          RAW="${RUNNER_TEMP}/raw.dmg"
+          MNT="${RUNNER_TEMP}/dmg-mnt"
+          mkdir -p "$MNT"
+          hdiutil create -size "${SIZE_MB}m" -fs APFS -volname "Azeroth Survivors" -ov "$RAW"
+          hdiutil attach "$RAW" -mountpoint "$MNT" -nobrowse -noverify
+          ditto "$STAGE" "$MNT"
+          hdiutil detach "$MNT"
+          rm -f AzerothSurvivors-macos-arm64.dmg
+          hdiutil convert "$RAW" -format UDZO -o AzerothSurvivors-macos-arm64.dmg
+          rm -f "$RAW"
           ls -lh AzerothSurvivors-macos-arm64.dmg
           hdiutil verify AzerothSurvivors-macos-arm64.dmg
 
