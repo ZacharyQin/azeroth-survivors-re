@@ -1,0 +1,171 @@
+# Player build of the native launcher, packed as an arm64 DMG.
+# Game data is not downloaded and is not in the image. The app looks for a
+# 1.12.1 Data folder at runtime (see the README written into the image).
+name: dmg
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/macos-dmg]
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: dmg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dmg:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "1"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_INCREMENTAL: "false"
+      CARGO_PROFILE_RELEASE_LTO: "off"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          set -euxo pipefail
+          df -h /
+          ACTIVE="$(xcode-select -p)"
+          ACTIVE_APP="${ACTIVE%/Contents/Developer}"
+          ACTIVE_REAL="$(cd "$ACTIVE_APP" && pwd -P)"
+          echo "keeping $ACTIVE_REAL"
+          shopt -s nullglob
+          for app in /Applications/Xcode*.app; do
+            REAL="$(cd "$app" && pwd -P)"
+            if [ "$REAL" != "$ACTIVE_REAL" ]; then
+              echo "removing $app"
+              sudo rm -rf "$app"
+            fi
+          done
+          sudo rm -rf \
+            "${HOME}/Library/Android" \
+            "${HOME}/Library/Developer/CoreSimulator" \
+            "${HOME}/Library/Developer/Xcode/DerivedData" \
+            "${HOME}/Library/Developer/Xcode/Archives" \
+            "${HOME}/Library/Developer/Xcode/iOS DeviceSupport" \
+            "${HOME}/Library/Developer/Xcode/watchOS DeviceSupport" \
+            "${HOME}/Library/Developer/Xcode/tvOS DeviceSupport" \
+            /Library/Developer/CoreSimulator \
+            ${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache} \
+            || true
+          df -h /
+          AVAIL_KB="$(df -k / | awk 'NR==2 {print $4}')"
+          echo "avail_kb=$AVAIL_KB"
+          if [ "$AVAIL_KB" -lt 20000000 ]; then
+            echo "need at least 20 GiB free after cleanup"
+            exit 1
+          fi
+
+      - name: Toolchain
+        run: rustup show && rustc -V
+
+      - name: Build player binary
+        run: cargo build --release -p warcraft-survivors --no-default-features
+
+      - name: Pack DMG
+        run: |
+          set -euxo pipefail
+          BIN="target/release/warcraft-survivors"
+          file "$BIN"
+          file "$BIN" | grep -q "arm64"
+          strip -x "$BIN" || true
+
+          STAGE="${RUNNER_TEMP}/dmg-src"
+          APP="$STAGE/Azeroth Survivors.app"
+          MACOS="$APP/Contents/MacOS"
+          rm -rf "$STAGE"
+          mkdir -p "$MACOS" "$APP/Contents/Resources"
+          cp "$BIN" "$MACOS/warcraft-survivors"
+          cp LICENSE-MIT LICENSE-APACHE "$APP/Contents/Resources/"
+
+          cat > "$MACOS/launch" << 'EOF'
+          #!/bin/bash
+          MACOS="$(cd "$(dirname "$0")" && pwd)"
+          APP="$(cd "$MACOS/../.." && pwd)"
+          PARENT="$(dirname "$APP")"
+          SUPPORT="${HOME}/Library/Application Support/Azeroth Survivors"
+          if [ -z "${WOW_DATA+x}" ]; then
+            if [ -d "${SUPPORT}/Data" ]; then
+              export WOW_DATA="${SUPPORT}/Data"
+            elif [ -d "${PARENT}/Data" ]; then
+              export WOW_DATA="${PARENT}/Data"
+            elif [ -d "${PARENT}/WoW/Data" ]; then
+              export WOW_DATA="${PARENT}/WoW/Data"
+            fi
+          fi
+          echo "WOW_DATA=${WOW_DATA-<unset>}" >&2
+          exec "${MACOS}/warcraft-survivors"
+          EOF
+          # The heredoc above is indented for YAML; strip those ten spaces.
+          sed -i '' 's/^          //' "$MACOS/launch"
+          chmod 755 "$MACOS/launch" "$MACOS/warcraft-survivors"
+
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Azeroth Survivors</string>
+            <key>CFBundleDisplayName</key><string>Azeroth Survivors</string>
+            <key>CFBundleIdentifier</key><string>dev.azeroth-survivors.player</string>
+            <key>CFBundleVersion</key><string>${GITHUB_SHA}</string>
+            <key>CFBundleShortVersionString</key><string>0.2.0</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>launch</string>
+            <key>LSMinimumSystemVersion</key><string>13.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>LSApplicationCategoryType</key><string>public.app-category.games</string>
+          </dict>
+          </plist>
+          EOF
+          sed -i '' 's/^          //' "$APP/Contents/Info.plist"
+
+          cat > "$STAGE/README.txt" << 'EOF'
+          Azeroth Survivors (macOS arm64)
+
+          This image is the engine only. It does not contain a WoW client.
+          Put your own 1.12.1 Data folder (terrain.MPQ and patch.MPQ) in one of:
+
+            ~/Library/Application Support/Azeroth Survivors/Data
+            <same folder as the app>/Data
+            <same folder as the app>/WoW/Data
+
+          Downloads are quarantined. If the app is killed on open:
+
+            xattr -dr com.apple.quarantine "/path/to/Azeroth Survivors.app"
+
+          The signature is ad-hoc, not an Apple Developer ID.
+          EOF
+
+          codesign --force --sign - --timestamp=none "$MACOS/warcraft-survivors"
+          if codesign --force --sign - --timestamp=none "$APP"; then
+            codesign -dv --verbose=2 "$APP"
+          else
+            echo "bundle ad-hoc sign failed; the arm64 binary is signed"
+            codesign -dv "$MACOS/warcraft-survivors"
+          fi
+
+          rm -rf target
+          hdiutil create \
+            -volname "Azeroth Survivors" \
+            -srcfolder "$STAGE" \
+            -ov -format UDZO \
+            "AzerothSurvivors-macos-arm64.dmg"
+          ls -lh AzerothSurvivors-macos-arm64.dmg
+          hdiutil verify AzerothSurvivors-macos-arm64.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AzerothSurvivors-macos-arm64
+          path: AzerothSurvivors-macos-arm64.dmg
+          if-no-files-found: error
+          compression-level: 0
