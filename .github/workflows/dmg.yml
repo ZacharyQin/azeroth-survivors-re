@@ -34,34 +34,10 @@ jobs:
         run: |
           set -euxo pipefail
           df -h /
-          ACTIVE="$(xcode-select -p)"
-          ACTIVE_APP="${ACTIVE%/Contents/Developer}"
-          ACTIVE_REAL="$(cd "$ACTIVE_APP" && pwd -P)"
-          echo "keeping $ACTIVE_REAL"
-          shopt -s nullglob
-          for app in /Applications/Xcode*.app; do
-            REAL="$(cd "$app" && pwd -P)"
-            if [ "$REAL" != "$ACTIVE_REAL" ]; then
-              echo "removing $app"
-              sudo rm -rf "$app"
-            fi
-          done
-          sudo rm -rf \
-            "${HOME}/Library/Android" \
-            "${HOME}/Library/Developer/CoreSimulator" \
-            "${HOME}/Library/Developer/Xcode/DerivedData" \
-            "${HOME}/Library/Developer/Xcode/Archives" \
-            "${HOME}/Library/Developer/Xcode/iOS DeviceSupport" \
-            "${HOME}/Library/Developer/Xcode/watchOS DeviceSupport" \
-            "${HOME}/Library/Developer/Xcode/tvOS DeviceSupport" \
-            /Library/Developer/CoreSimulator \
-            ${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache} \
-            || true
-          df -h /
           AVAIL_KB="$(df -k / | awk 'NR==2 {print $4}')"
           echo "avail_kb=$AVAIL_KB"
           if [ "$AVAIL_KB" -lt 20000000 ]; then
-            echo "need at least 20 GiB free after cleanup"
+            echo "need at least 20 GiB free"
             exit 1
           fi
 
