@@ -63,7 +63,7 @@ jobs:
           cp "$BIN" "$MACOS/warcraft-survivors"
           cp LICENSE-MIT LICENSE-APACHE "$APP/Contents/Resources/"
 
-          cp packaging/macos/launch "$MACOS/launch"
+          swiftc -O -target arm64-apple-macos13.0 -o "$MACOS/launch" packaging/macos/FetchProgress.swift
           chmod 755 "$MACOS/launch" "$MACOS/warcraft-survivors"
 
           cat > "$APP/Contents/Info.plist" << EOF
@@ -90,13 +90,14 @@ jobs:
           Azeroth Survivors (macOS arm64)
 
           This image is the engine only. On first launch, if no local Data folder is
-          found, the app downloads the 1.12.1 client archive (about 5.5 GB) into:
+          found, the app shows a progress window and downloads the 1.12.1 client
+          archive (about 5.5 GB) into:
 
             ~/Library/Application Support/Azeroth Survivors/Data
 
-          An existing Data folder is used instead, in this order: that path, then
-          <same folder as the app>/Data, then <same folder as the app>/WoW/Data.
-          Set WOW_DATA to skip the search and the download.
+          The window shows bytes, percent, and transfer rate. An existing Data folder
+          is used instead, in this order: that path, then <same folder as the app>/Data,
+          then <same folder as the app>/WoW/Data. Set WOW_DATA to skip the download.
 
           Downloads of this disk image are quarantined. If the app is killed on open:
 
@@ -105,6 +106,7 @@ jobs:
           The signature is ad-hoc, not an Apple Developer ID.
           EOF
 
+          codesign --force --sign - --timestamp=none "$MACOS/launch"
           codesign --force --sign - --timestamp=none "$MACOS/warcraft-survivors"
           if codesign --force --sign - --timestamp=none "$APP"; then
             codesign -dv --verbose=2 "$APP"
